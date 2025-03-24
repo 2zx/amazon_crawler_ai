@@ -179,6 +179,7 @@ class AmazonCrawler:
         """
         soup = BeautifulSoup(html_content, "lxml")
         products = []
+        asins = []
 
         # Cerca tutti gli elementi prodotto nella pagina
         product_elements = soup.select("div.s-result-item[data-asin]:not([data-asin=''])") or soup.select("div.sg-col[data-asin]:not([data-asin=''])")
@@ -191,13 +192,33 @@ class AmazonCrawler:
                 if not asin:
                     continue
 
+                if asin in asins:
+                    continue
+
+                asins.append(asin)  # Aggiungi ASIN all'elenco per evitare duplicati
+
                 # Estrai il titolo del prodotto
-                title_element = element.select_one("h2 a span") or element.select_one("h5 a") or element.select_one(".a-size-medium.a-color-base.a-text-normal")
+                title_element = element.select_one("a h2 span") or element.select_one("a h5") or element.select_one(".a-size-medium.a-color-base.a-text-normal")
                 title = title_element.text.strip() if title_element else "Titolo non disponibile"
 
                 # Estrai l'URL del prodotto
-                link_element = element.select_one("h2 a") or element.select_one("h5 a")
-                link = urljoin(self.base_url, link_element.get("href")) if link_element else None
+                # Esempio di approccio multi-selettore
+                selectors = [
+                    "a.a-link-normal",
+                    "h2 a",
+                    "h5 a",
+                    ".a-link-normal"
+                ]
+
+                link = None
+                for selector in selectors:
+                    link_element = element.select_one(selector)
+                    if link_element and link_element.get("href"):
+                        link = urljoin(self.base_url, link_element.get("href"))
+                        break
+
+                if not link:
+                    continue  # Skip this product if no valid URL found
 
                 # Estrai il prezzo
                 price_element = element.select_one(".a-price .a-offscreen") or element.select_one(".a-price")

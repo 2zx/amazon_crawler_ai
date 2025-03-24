@@ -30,6 +30,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
 # Funzioni di utilità per le API
 def get_api_url(endpoint: str) -> str:
     """
@@ -98,6 +99,100 @@ def get_product_details(url: str, use_cloudscraper: bool = True) -> Dict[str, An
         return {"error": str(e)}
 
 
+def get_watchlist() -> List[Dict[str, Any]]:
+    """
+    Chiama l'API per ottenere la watch list
+    """
+    api_url = get_api_url("/watchlist")
+
+    try:
+        response = requests.get(
+            api_url,
+            timeout=10,
+        )
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"Errore API: {response.status_code} - {response.text}")
+            return []
+
+    except Exception as e:
+        st.error(f"Errore durante la chiamata API: {e}")
+        return []
+
+
+def add_to_watchlist(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Chiama l'API per aggiungere un prodotto alla watch list
+    """
+    api_url = get_api_url("/watchlist/add")
+
+    try:
+        response = requests.post(
+            api_url,
+            json=data,
+            timeout=30,  # Timeout più lungo perché potrebbe richiedere un crawling
+        )
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"Errore API: {response.status_code} - {response.text}")
+            return {"error": response.text}
+
+    except Exception as e:
+        st.error(f"Errore durante la chiamata API: {e}")
+        return {"error": str(e)}
+
+
+def remove_from_watchlist(job_id: int) -> bool:
+    """
+    Chiama l'API per rimuovere un prodotto dalla watch list
+    """
+    api_url = get_api_url(f"/watchlist/{job_id}")
+
+    try:
+        response = requests.delete(
+            api_url,
+            timeout=10,
+        )
+
+        if response.status_code == 200:
+            return True
+        else:
+            st.error(f"Errore API: {response.status_code} - {response.text}")
+            return False
+
+    except Exception as e:
+        st.error(f"Errore durante la chiamata API: {e}")
+        return False
+
+
+def update_watchlist_item(job_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Chiama l'API per aggiornare un prodotto nella watch list
+    """
+    api_url = get_api_url(f"/watchlist/{job_id}")
+
+    try:
+        response = requests.put(
+            api_url,
+            json=data,
+            timeout=10,
+        )
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"Errore API: {response.status_code} - {response.text}")
+            return {"error": response.text}
+
+    except Exception as e:
+        st.error(f"Errore durante la chiamata API: {e}")
+        return {"error": str(e)}
+
+
 # Funzioni per visualizzare i risultati
 def display_product_card(product: Dict[str, Any], col):
     """
@@ -127,6 +222,10 @@ def display_product_card(product: Dict[str, Any], col):
         if st.button("Dettagli", key=f"details_{product['asin']}"):
             st.session_state.selected_product_url = product['url']
             st.experimental_rerun()
+
+        # Pulsante per aggiungere alla watch list
+        if st.button("Aggiungi alla Watch List", key=f"watchlist_{product['asin']}"):
+            add_product_to_watchlist(product)
 
 
 def display_product_details(product: Dict[str, Any]):
@@ -199,6 +298,318 @@ def display_product_details(product: Dict[str, Any]):
                 st.markdown(f"[Vedi su Amazon]({related['url']})")
 
 
+def display_watchlist_item(item: Dict[str, Any], col, show_actions=True):
+    """
+    Visualizza un elemento della watch list
+    """
+    with col:
+        st.subheader(item.get("name") or item["product"]["title"][:50] + "..." if len(item["product"]["title"]) > 50 else item["product"]["title"])
+
+        if item["product"].get("image_url"):
+            try:
+                st.image(item["product"]["image_url"], width=150)
+            except Exception:
+                st.info("Immagine non disponibile")
+
+        st.write(f"**Prezzo attuale:** {item['product']['price']}")
+
+        if item.get("target_price"):
+            st.write(f"**Prezzo target:** {item['target_price']}")
+
+        # Notifiche attive
+        notifications = []
+        if item.get("notify_on_price_drop"):
+            notifications.append("Calo di prezzo")
+        if item.get("notify_on_availability"):
+            notifications.append("Disponibilità")
+
+        if notifications:
+            st.write(f"**Notifiche:** {', '.join(notifications)}")
+
+        # Stato
+        st.write(f"**Stato:** {'Attivo' if item.get('is_active') else 'Inattivo'}")
+
+        # Link al prodotto
+        st.markdown(f"[Vedi su Amazon]({item['product']['url']})")
+
+        # Pulsante per visualizzare lo storico prezzi
+        if st.button("Storico prezzi", key=f"history_{item['id']}"):
+            display_price_history_chart(item['product']['id'])
+
+        # Azioni
+        if show_actions:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button("Modifica", key=f"edit_{item['id']}"):
+                    st.session_state.edit_watchlist_item = item
+                    st.experimental_rerun()
+
+            with col2:
+                if st.button("Rimuovi", key=f"remove_{item['id']}"):
+                    if remove_from_watchlist(item['id']):
+                        st.success("Prodotto rimosso dalla Watch List")
+                        # Aggiorna la watch list in sessione
+                        if "watchlist" in st.session_state:
+                            st.session_state.watchlist = [i for i in st.session_state.watchlist if i['id'] != item['id']]
+                        st.experimental_rerun()
+
+
+def display_watchlist_tab():
+    """
+    Visualizza il tab della Watch List
+    """
+    st.header("Watch List")
+
+    # Aggiornamento manuale dei prezzi
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("Aggiorna prezzi", help="Avvia un aggiornamento manuale dei prezzi"):
+            with st.spinner("Aggiornamento prezzi in corso..."):
+                try:
+                    response = requests.post(
+                        get_api_url("/watchlist/update-prices"),
+                        params={"limit": 10},
+                        timeout=60,
+                    )
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        st.success(f"Aggiornamento completato! "
+                                   f"Aggiornati: {result['products_updated']}, "
+                                   f"Falliti: {result['products_failed']}, "
+                                   f"Notifiche: {result['notifications_sent']}")
+
+                        # Aggiorna la watch list
+                        st.session_state.watchlist = get_watchlist()
+                        st.experimental_rerun()
+                    else:
+                        st.error(f"Errore durante l'aggiornamento: {response.text}")
+                except Exception as e:
+                    st.error(f"Errore: {e}")
+
+    # Form per aggiungere un prodotto manualmente
+    with st.expander("Aggiungi prodotto manualmente", expanded=False):
+        with st.form("add_product_form"):
+            url = st.text_input("URL del prodotto Amazon")
+            name = st.text_input("Nome personalizzato (opzionale)")
+            target_price = st.number_input("Prezzo target (opzionale)", min_value=0.0, step=0.01, value=0.0)
+            col1, col2 = st.columns(2)
+            with col1:
+                notify_price = st.checkbox("Notifica calo di prezzo", value=True)
+            with col2:
+                notify_avail = st.checkbox("Notifica disponibilità", value=False)
+            email = st.text_input("Email per notifiche (opzionale)")
+
+            submitted = st.form_submit_button("Aggiungi alla Watch List")
+
+            if submitted:
+                # Prepara il prodotto
+                product = {
+                    "url": url,
+                    "asin": None  # L'API cercherà di estrarlo dall'URL
+                }
+                result = add_product_to_watchlist(
+                    product,
+                    notify_on_price_drop=notify_price,
+                    notify_on_availability=notify_avail,
+                    target_price=target_price if target_price > 0 else None,
+                    name=name if name else None,
+                    notification_email=email if email else None
+                )
+                if result:
+                    st.experimental_rerun()
+
+    # Form per modificare un elemento
+    if "edit_watchlist_item" in st.session_state:
+        item = st.session_state.edit_watchlist_item
+        st.subheader(f"Modifica '{item.get('name') or item['product']['title'][:30]}...'")
+
+        with st.form("edit_product_form"):
+            name = st.text_input("Nome personalizzato", value=item.get("name") or "")
+            target_price = st.number_input(
+                "Prezzo target",
+                min_value=0.0,
+                step=0.01,
+                value=float(item.get("target_price") or 0.0)
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                notify_price = st.checkbox(
+                    "Notifica calo di prezzo",
+                    value=item.get("notify_on_price_drop", True)
+                )
+            with col2:
+                notify_avail = st.checkbox(
+                    "Notifica disponibilità",
+                    value=item.get("notify_on_availability", False)
+                )
+            is_active = st.checkbox("Attivo", value=item.get("is_active", True))
+            email = st.text_input(
+                "Email per notifiche",
+                value=item.get("notification_email") or ""
+            )
+
+            col1, col2 = st.columns(2)
+            with col1:
+                submitted = st.form_submit_button("Salva modifiche")
+            with col2:
+                cancel = st.form_submit_button("Annulla")
+
+            if submitted:
+                # Prepara i dati
+                data = {
+                    "name": name if name else None,
+                    "notify_on_price_drop": notify_price,
+                    "notify_on_availability": notify_avail,
+                    "is_active": is_active,
+                    "notification_email": email if email else None
+                }
+
+                if target_price > 0:
+                    data["target_price"] = target_price
+
+                # Chiamata API
+                with st.spinner("Aggiorno il prodotto..."):
+                    result = update_watchlist_item(item["id"], data)
+
+                    if "error" not in result:
+                        st.success("Prodotto aggiornato")
+                        # Aggiorna la watch list in sessione
+                        if "watchlist" in st.session_state:
+                            for i, wl_item in enumerate(st.session_state.watchlist):
+                                if wl_item["id"] == item["id"]:
+                                    st.session_state.watchlist[i] = result
+                                    break
+                        # Rimuovi l'elemento in modifica
+                        del st.session_state.edit_watchlist_item
+                        st.experimental_rerun()
+
+            if cancel:
+                del st.session_state.edit_watchlist_item
+                st.experimental_rerun()
+
+    # Carica o aggiorna la watch list
+    if "watchlist" not in st.session_state or st.button("Aggiorna Watch List"):
+        with st.spinner("Caricamento Watch List..."):
+            st.session_state.watchlist = get_watchlist()
+
+    # Visualizza la watch list
+    if "watchlist" in st.session_state:
+        if not st.session_state.watchlist:
+            st.info("Non hai ancora prodotti nella Watch List. Aggiungi un prodotto dalla ricerca o inserisci manualmente l'URL.")
+        else:
+            st.write(f"Prodotti monitorati: {len(st.session_state.watchlist)}")
+
+            # Crea una griglia di 3 colonne
+            num_cols = 3
+            rows = (len(st.session_state.watchlist) + num_cols - 1) // num_cols  # Arrotonda per eccesso
+
+            for row in range(rows):
+                cols = st.columns(num_cols)
+                for col_idx in range(num_cols):
+                    item_idx = row * num_cols + col_idx
+                    if item_idx < len(st.session_state.watchlist):
+                        display_watchlist_item(st.session_state.watchlist[item_idx], cols[col_idx])
+
+
+def get_price_history(product_id: int) -> List[Dict[str, Any]]:
+    """
+    Chiama l'API per ottenere lo storico dei prezzi di un prodotto
+    """
+    api_url = get_api_url(f"/product/{product_id}/price-history")
+
+    try:
+        response = requests.get(
+            api_url,
+            timeout=10,
+        )
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"Errore API: {response.status_code} - {response.text}")
+            return []
+
+    except Exception as e:
+        st.error(f"Errore durante la chiamata API: {e}")
+        return []
+
+
+def display_price_history_chart(product_id: int):
+    """
+    Visualizza un grafico dello storico dei prezzi
+    """
+    # In un'implementazione reale, qui chiameresti l'API
+    # Per ora, usiamo dati di esempio
+
+    # Questi dati andrebbero sostituiti con quelli reali dall'API
+    price_history = [
+        {"date": "2025-03-01", "price": 29.99},
+        {"date": "2025-03-08", "price": 27.50},
+        {"date": "2025-03-15", "price": 24.99},
+        {"date": "2025-03-22", "price": 24.99},
+        {"date": "2025-03-24", "price": 19.99},
+    ]
+
+    # Crea un DataFrame con lo storico dei prezzi
+    if price_history:
+        df = pd.DataFrame(price_history)
+        df["date"] = pd.to_datetime(df["date"])
+
+        # Crea il grafico
+        st.subheader("Storico dei prezzi")
+        st.line_chart(df.set_index("date")["price"])
+    else:
+        st.info("Nessuno storico prezzi disponibile per questo prodotto")
+
+
+def add_product_to_watchlist(product, notify_on_price_drop=True, notify_on_availability=False,
+                             target_price=None, name=None, notification_email=None):
+    """
+    Funzione centralizzata per aggiungere un prodotto alla watchlist
+
+    Args:
+        product: Dizionario con i dati del prodotto (deve contenere almeno 'asin' e 'url')
+        notify_on_price_drop: Se inviare notifiche per cali di prezzo
+        notify_on_availability: Se inviare notifiche per disponibilità
+        target_price: Prezzo target opzionale
+        name: Nome personalizzato opzionale
+        notification_email: Email per le notifiche opzionale
+
+    Returns:
+        Dizionario con il risultato dell'operazione, o None se fallita
+    """
+    # Prepara i dati
+    data = {
+        "asin": product.get('asin'),
+        "url": product.get('url'),
+        "notify_on_price_drop": notify_on_price_drop,
+        "notify_on_availability": notify_on_availability
+    }
+
+    # Aggiungi i campi opzionali se presenti
+    if name:
+        data["name"] = name
+    if target_price and target_price > 0:
+        data["target_price"] = target_price
+    if notification_email:
+        data["notification_email"] = notification_email
+
+    # Chiamata API
+    with st.spinner("Aggiungo il prodotto alla Watch List..."):
+        result = add_to_watchlist(data)
+
+        if "error" not in result:
+            st.success("Prodotto aggiunto alla Watch List")
+            # Aggiorna la watch list in sessione
+            if "watchlist" in st.session_state:
+                st.session_state.watchlist.insert(0, result)
+            return result
+
+    return None
+
+
 # Interfaccia principale
 def main():
     # Titolo dell'app
@@ -228,7 +639,7 @@ def main():
     )
 
     # Tabs per diverse funzionalità
-    tab1, tab2 = st.tabs(["Ricerca Prodotti", "Analisi Prodotto"])
+    tab1, tab2, tab3 = st.tabs(["Ricerca Prodotti", "Analisi Prodotto", "Watch List"])
 
     # Tab 1: Ricerca Prodotti
     with tab1:
@@ -326,6 +737,10 @@ def main():
         # Visualizza i dettagli precedenti se presenti
         elif "product_details" in st.session_state:
             display_product_details(st.session_state.product_details)
+
+    # Tab 3: Watch List
+    with tab3:
+        display_watchlist_tab()
 
 
 # Funzione principale

@@ -8,6 +8,8 @@ from starlette.responses import Response
 from app.api.endpoints import router as api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.core.scheduler import start_scheduler
+from app.db.session import init_db
 
 # Configura il logging
 configure_logging()
@@ -31,6 +33,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    Evento eseguito all'avvio dell'applicazione
+    """
+    global scheduler
+
+    # Inizializza il database
+    init_db()
+
+    # Avvia lo scheduler per l'aggiornamento dei prezzi
+    # Ogni 60 minuti in produzione, ogni 15 minuti in sviluppo
+    interval = 60 if settings.ENVIRONMENT == "production" else 15
+    scheduler = start_scheduler(interval_minutes=interval)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    Evento eseguito all'arresto dell'applicazione
+    """
+    global scheduler
+
+    # Arresta lo scheduler se attivo
+    if scheduler:
+        scheduler.stop()
+
+
 # Middleware per reindirizzare a Streamlit (in produzione)
 class StreamlitRedirectMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -40,12 +71,15 @@ class StreamlitRedirectMiddleware(BaseHTTPMiddleware):
             return RedirectResponse(url=f"http://localhost:8501{request.url.path}")
         return await call_next(request)
 
+
 # Aggiungi middleware solo in produzione
 if settings.ENVIRONMENT == "production":
     app.add_middleware(StreamlitRedirectMiddleware)
 
+
 # Includi i router API
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
 
 @app.get("/", include_in_schema=False)
 async def root():
@@ -54,12 +88,14 @@ async def root():
     """
     return RedirectResponse(url=settings.DOCS_URL)
 
+
 @app.get("/health", tags=["health"])
 async def health_check():
     """
     Endpoint di health check per Google Cloud Run
     """
     return {"status": "healthy"}
+
 
 if __name__ == "__main__":
     import uvicorn

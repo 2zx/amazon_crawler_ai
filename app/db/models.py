@@ -26,13 +26,13 @@ class Product(Base):
     reviews_count = Column(Integer)
     availability = Column(String(200))
     description = Column(Text)
-    
+
     # Metadati
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_checked_at = Column(DateTime, default=datetime.utcnow)
     is_available = Column(Boolean, default=True)
-    
+
     # Relazioni
     price_history = relationship("PriceHistory", back_populates="product")
     specifications = relationship("ProductSpecification", back_populates="product")
@@ -51,7 +51,7 @@ class PriceHistory(Base):
     price_value = Column(Float)
     currency = Column(String(3))
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
-    
+
     # Relazioni
     product = relationship("Product", back_populates="price_history")
 
@@ -66,7 +66,7 @@ class ProductSpecification(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     key = Column(String(200), nullable=False)
     value = Column(Text, nullable=False)
-    
+
     # Relazioni
     product = relationship("Product", back_populates="specifications")
 
@@ -81,7 +81,7 @@ class ProductImage(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     url = Column(String(1000), nullable=False)
     position = Column(Integer, default=0)  # Ordine delle immagini
-    
+
     # Relazioni
     product = relationship("Product", back_populates="images")
 
@@ -102,6 +102,6 @@ class TrackingJob(Base):
     notification_email = Column(String(200))
     created_at = Column(DateTime, default=datetime.utcnow)
     last_notification_at = Column(DateTime)
-    
+
     # Relazioni
     product = relationship("Product")
