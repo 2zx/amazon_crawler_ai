@@ -31,7 +31,89 @@ st.set_page_config(
 )
 
 
-# Funzioni di utilità per le API
+# Funzioni per azioni specifiche
+
+def view_product_details(product_url):
+    """
+    Imposta lo stato per visualizzare i dettagli di un prodotto
+    """
+    st.session_state.selected_product_url = product_url
+    # Usa la nuova funzione per impostare il tab attivo
+    set_active_tab("Analisi Prodotto")
+    st.session_state.action_performed = True
+    # Assicurati che il prodotto venga analizzato al prossimo caricamento
+    st.session_state.pending_product_action = {
+        "action": "view_details",
+        "url": product_url
+    }
+
+
+def add_to_watchlist_action(product):
+    """
+    Imposta lo stato per aggiungere un prodotto alla watchlist
+    """
+    # Usa la nuova funzione per impostare il tab attivo
+    set_active_tab("Watch List")
+    # Forza il caricamento della watchlist al prossimo ciclo
+    st.session_state.tab_watchlist_loaded = False
+    st.session_state.action_performed = True
+    st.session_state.pending_product_action = {
+        "action": "add_to_watchlist",
+        "product": product
+    }
+
+
+def initialize_session_state():
+    """
+    Inizializza tutte le variabili di stato necessarie, se non esistono già
+    """
+    # Tab attivo
+    if "active_tab" not in st.session_state:
+        st.session_state.active_tab = "Ricerca Prodotti"
+
+    # Watchlist
+    if "watchlist" not in st.session_state:
+        st.session_state.watchlist = None
+
+    # Flag per il caricamento della watchlist
+    if "tab_watchlist_loaded" not in st.session_state:
+        st.session_state.tab_watchlist_loaded = False
+
+    # Risultati della ricerca
+    if "search_results" not in st.session_state:
+        st.session_state.search_results = None
+
+    # Dettagli del prodotto
+    if "product_details" not in st.session_state:
+        st.session_state.product_details = None
+
+    # URL del prodotto
+    if "product_url" not in st.session_state:
+        st.session_state.product_url = None
+
+
+def load_watchlist_on_tab_change():
+    """
+    Funzione per caricare la watchlist quando si cambia tab
+    """
+    # Se il tab attivo è la watchlist e non è stata ancora caricata in questa sessione
+    if st.session_state.active_tab == "Watch List" and not st.session_state.tab_watchlist_loaded:
+        st.session_state.watchlist = get_watchlist()
+        st.session_state.tab_watchlist_loaded = True
+
+
+def set_active_tab(tab_name):
+    """
+    Imposta il tab attivo e carica i dati necessari
+    """
+    # Se stiamo passando alla watchlist, impostiamo il flag per ricaricarla
+    if tab_name == "Watch List" and st.session_state.active_tab != "Watch List":
+        st.session_state.tab_watchlist_loaded = False
+
+    # Aggiorna il tab attivo
+    st.session_state.active_tab = tab_name
+
+
 def get_api_url(endpoint: str) -> str:
     """
     Costruisce l'URL per una API endpoint
@@ -112,7 +194,8 @@ def get_watchlist() -> List[Dict[str, Any]]:
         )
 
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            return data
         else:
             st.error(f"Errore API: {response.status_code} - {response.text}")
             return []
@@ -218,21 +301,55 @@ def display_product_card(product: Dict[str, Any], col):
         # Link al prodotto
         st.markdown(f"[Vedi su Amazon]({product['url']})")
 
-        # Pulsanti per dettagli e watchlist in due colonne
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Dettagli", key=f"details_{product['asin']}"):
-                st.session_state.selected_product_url = product['url']
-                st.session_state.active_tab = "Analisi Prodotto"  # Imposta tab attivo
-                st.experimental_rerun()
+        # Pulsanti per azioni dirette (senza rerun)
+        if st.button("Dettagli", key=f"details_{product['asin']}"):
+            # Salva l'URL nella session state
+            st.session_state.product_url = product['url']
 
-        with col2:
-            # Pulsante per aggiungere alla watch list
-            if st.button("Aggiungi alla Watch List", key=f"watchlist_{product['asin']}"):
-                result = add_product_to_watchlist(product)
-                if result:
-                    st.session_state.active_tab = "Watch List"  # Vai alla Watch List dopo l'aggiunta
+            # Imposta il tab attivo
+            st.session_state.active_tab = "Analisi Prodotto"
+
+            # Carica i dettagli del prodotto
+            with st.spinner("Caricamento dettagli prodotto..."):
+                result = get_product_details(product['url'], True)  # Assume CloudScraper è abilitato
+                if "error" not in result:
+                    st.session_state.product_details = result["product"]
                     st.experimental_rerun()
+                else:
+                    st.error(f"Errore durante il caricamento dei dettagli: {result.get('error')}")
+
+        # Pulsante per aggiungere alla watch list
+        if st.button("Aggiungi alla Watch List", key=f"watchlist_{product['asin']}"):
+            # Prepara i dati
+            data = {
+                "asin": product.get('asin'),
+                "url": product.get('url'),
+                "notify_on_price_drop": True,
+                "notify_on_availability": False
+            }
+
+            # Chiamata API diretta
+            with st.spinner("Aggiungo il prodotto alla Watch List..."):
+                result = add_to_watchlist(data)
+
+                if "error" not in result:
+                    st.success("Prodotto aggiunto alla Watch List")
+
+                    # Imposta il tab attivo
+                    st.session_state.active_tab = "Watch List"
+
+                    # Forza il caricamento della watchlist
+                    st.session_state.tab_watchlist_loaded = False
+
+                    # Aggiungi il prodotto alla watchlist locale
+                    if "watchlist" in st.session_state and st.session_state.watchlist is not None:
+                        st.session_state.watchlist = [result] + st.session_state.watchlist
+                    else:
+                        st.session_state.watchlist = [result]
+
+                    st.experimental_rerun()
+                else:
+                    st.error(f"Errore nell'aggiunta del prodotto: {result.get('error')}")
 
 
 def display_product_details(product: Dict[str, Any]):
@@ -270,10 +387,36 @@ def display_product_details(product: Dict[str, Any]):
 
         # Pulsante per aggiungere alla watch list
         if st.button("Aggiungi alla Watch List", key=f"watchlist_detail_{product['asin']}"):
-            result = add_product_to_watchlist(product)
-            if result:
-                st.session_state.active_tab = "Watch List"  # Vai alla Watch List dopo l'aggiunta
-                st.experimental_rerun()
+            # Prepara i dati
+            data = {
+                "asin": product.get('asin'),
+                "url": product.get('url'),
+                "notify_on_price_drop": True,
+                "notify_on_availability": False
+            }
+
+            # Chiamata API diretta
+            with st.spinner("Aggiungo il prodotto alla Watch List..."):
+                result = add_to_watchlist(data)
+
+                if "error" not in result:
+                    st.success("Prodotto aggiunto alla Watch List")
+
+                    # Imposta il tab attivo
+                    st.session_state.active_tab = "Watch List"
+
+                    # Forza il caricamento della watchlist
+                    st.session_state.tab_watchlist_loaded = False
+
+                    # Aggiungi il prodotto alla watchlist locale
+                    if "watchlist" in st.session_state and st.session_state.watchlist is not None:
+                        st.session_state.watchlist = [result] + st.session_state.watchlist
+                    else:
+                        st.session_state.watchlist = [result]
+
+                    st.experimental_rerun()
+                else:
+                    st.error(f"Errore nell'aggiunta del prodotto: {result.get('error')}")
 
     with col2:
         # Descrizione
@@ -375,6 +518,12 @@ def display_watchlist_tab():
     """
     st.header("Watch List")
 
+    # Verifica se dobbiamo caricare la watchlist
+    if not st.session_state.tab_watchlist_loaded or st.session_state.watchlist is None:
+        with st.spinner("Caricamento Watch List..."):
+            st.session_state.watchlist = get_watchlist()
+            st.session_state.tab_watchlist_loaded = True
+
     # Aggiornamento manuale dei prezzi
     col1, col2 = st.columns([3, 1])
     with col2:
@@ -394,9 +543,8 @@ def display_watchlist_tab():
                                    f"Falliti: {result['products_failed']}, "
                                    f"Notifiche: {result['notifications_sent']}")
 
-                        # Aggiorna la watch list
+                        # Aggiorna la watch list in sessione
                         st.session_state.watchlist = get_watchlist()
-                        st.experimental_rerun()
                     else:
                         st.error(f"Errore durante l'aggiornamento: {response.text}")
                 except Exception as e:
@@ -418,21 +566,26 @@ def display_watchlist_tab():
             submitted = st.form_submit_button("Aggiungi alla Watch List")
 
             if submitted:
-                # Prepara il prodotto
-                product = {
-                    "url": url,
-                    "asin": None  # L'API cercherà di estrarlo dall'URL
-                }
-                result = add_product_to_watchlist(
-                    product,
-                    notify_on_price_drop=notify_price,
-                    notify_on_availability=notify_avail,
-                    target_price=target_price if target_price > 0 else None,
-                    name=name if name else None,
-                    notification_email=email if email else None
-                )
-                if result:
-                    st.experimental_rerun()
+                if not is_valid_amazon_url(url):
+                    st.error("L'URL fornito non sembra essere un URL Amazon valido")
+                else:
+                    # Prepara il prodotto
+                    product = {
+                        "url": url,
+                        "asin": None  # L'API cercherà di estrarlo dall'URL
+                    }
+                    result = add_product_to_watchlist(
+                        product,
+                        notify_on_price_drop=notify_price,
+                        notify_on_availability=notify_avail,
+                        target_price=target_price if target_price > 0 else None,
+                        name=name if name else None,
+                        notification_email=email if email else None
+                    )
+                    if result:
+                        # Ricarica subito la watchlist
+                        st.session_state.watchlist = get_watchlist()
+                        st.success("Prodotto aggiunto con successo")
 
     # Form per modificare un elemento
     if "edit_watchlist_item" in st.session_state:
@@ -490,41 +643,38 @@ def display_watchlist_tab():
                     if "error" not in result:
                         st.success("Prodotto aggiornato")
                         # Aggiorna la watch list in sessione
-                        if "watchlist" in st.session_state:
-                            for i, wl_item in enumerate(st.session_state.watchlist):
-                                if wl_item["id"] == item["id"]:
-                                    st.session_state.watchlist[i] = result
-                                    break
+                        st.session_state.watchlist = get_watchlist()
                         # Rimuovi l'elemento in modifica
                         del st.session_state.edit_watchlist_item
-                        st.experimental_rerun()
 
             if cancel:
                 del st.session_state.edit_watchlist_item
-                st.experimental_rerun()
 
-    # Carica o aggiorna la watch list
-    if "watchlist" not in st.session_state or st.button("Aggiorna Watch List"):
+    # Pulsante per aggiornare manualmente la watchlist
+    if st.button("Aggiorna Watch List"):
         with st.spinner("Caricamento Watch List..."):
             st.session_state.watchlist = get_watchlist()
+            st.success("Watchlist aggiornata")
 
-    # Visualizza la watch list
-    if "watchlist" in st.session_state:
-        if not st.session_state.watchlist:
-            st.info("Non hai ancora prodotti nella Watch List. Aggiungi un prodotto dalla ricerca o inserisci manualmente l'URL.")
-        else:
-            st.write(f"Prodotti monitorati: {len(st.session_state.watchlist)}")
+    # Visualizza lo stato attuale della watchlist
+    if st.session_state.watchlist is None:
+        st.info("La watchlist non è stata ancora caricata. Usa il pulsante sopra per caricarla.")
+    elif len(st.session_state.watchlist) == 0:
+        st.info("Non hai ancora prodotti nella Watch List. Aggiungi un prodotto dalla ricerca o inserisci manualmente l'URL.")
+    else:
+        # Visualizza la watchlist
+        st.write(f"Prodotti monitorati: {len(st.session_state.watchlist)}")
 
-            # Crea una griglia di 3 colonne
-            num_cols = 3
-            rows = (len(st.session_state.watchlist) + num_cols - 1) // num_cols  # Arrotonda per eccesso
+        # Crea una griglia di 3 colonne
+        num_cols = 3
+        rows = (len(st.session_state.watchlist) + num_cols - 1) // num_cols  # Arrotonda per eccesso
 
-            for row in range(rows):
-                cols = st.columns(num_cols)
-                for col_idx in range(num_cols):
-                    item_idx = row * num_cols + col_idx
-                    if item_idx < len(st.session_state.watchlist):
-                        display_watchlist_item(st.session_state.watchlist[item_idx], cols[col_idx])
+        for row in range(rows):
+            cols = st.columns(num_cols)
+            for col_idx in range(num_cols):
+                item_idx = row * num_cols + col_idx
+                if item_idx < len(st.session_state.watchlist):
+                    display_watchlist_item(st.session_state.watchlist[item_idx], cols[col_idx])
 
 
 def get_price_history(product_id: int) -> List[Dict[str, Any]]:
@@ -594,6 +744,9 @@ def add_product_to_watchlist(product, notify_on_price_drop=True, notify_on_avail
     Returns:
         Dizionario con il risultato dell'operazione, o None se fallita
     """
+    # Debug
+    st.write(f"Debug: Aggiunta del prodotto alla watchlist: URL={product.get('url')}")
+
     # Prepara i dati
     data = {
         "asin": product.get('asin'),
@@ -614,23 +767,32 @@ def add_product_to_watchlist(product, notify_on_price_drop=True, notify_on_avail
     with st.spinner("Aggiungo il prodotto alla Watch List..."):
         result = add_to_watchlist(data)
 
+        # Debug
+        st.write(f"Debug: Risultato API add_to_watchlist: {result}")
+
         if "error" not in result:
             st.success("Prodotto aggiunto alla Watch List")
 
-            # Assicurati che la watchlist venga caricata se non esiste
-            if "watchlist" not in st.session_state:
-                st.session_state.watchlist = get_watchlist()
-
             # Aggiorna la watch list in sessione
-            if "watchlist" in st.session_state:
-                st.session_state.watchlist.insert(0, result)
+            st.write("Debug: Aggiornamento watchlist dopo aggiunta prodotto")
+            fresh_watchlist = get_watchlist()
+            st.session_state.watchlist = fresh_watchlist
+
+            # Debug
+            st.write(f"Debug: Watchlist ora contiene {len(st.session_state.watchlist) if st.session_state.watchlist else 0} elementi")
+
             return result
+        else:
+            st.error(f"Errore nell'aggiunta del prodotto: {result.get('error')}")
 
     return None
 
 
 # Interfaccia principale
 def main():
+    # Inizializza lo stato della sessione
+    initialize_session_state()
+
     # Titolo dell'app
     st.title("Amazon Crawler")
     st.write("Ricerca e analisi di prodotti Amazon")
@@ -657,13 +819,16 @@ def main():
         """
     )
 
-    # Imposta il tab attivo se presente in session_state
-    if "active_tab" not in st.session_state:
-        st.session_state.active_tab = "Ricerca Prodotti"
-
+    # Imposta il tab attivo
     tabs = ["Ricerca Prodotti", "Analisi Prodotto", "Watch List"]
-    active_index = tabs.index(st.session_state.active_tab)
+    tab_index = tabs.index(st.session_state.active_tab)
+
+    # Crea i tab
     tab1, tab2, tab3 = st.tabs(tabs)
+
+    # Attiva il tab corretto
+    tab_objects = [tab1, tab2, tab3]
+    active_tab = tab_objects[tab_index]
 
     # Tab 1: Ricerca Prodotti
     with tab1:
@@ -703,7 +868,7 @@ def main():
                 st.warning("Inserisci una query di ricerca")
 
         # Visualizza i risultati precedenti se presenti
-        if "search_results" in st.session_state and not search_query:
+        if "search_results" in st.session_state and not search_query and st.session_state.search_results:
             results = st.session_state.search_results
             st.success(f"Ultimi risultati: {results['count']} prodotti per '{results['query']}'")
 
@@ -724,11 +889,9 @@ def main():
     with tab2:
         st.header("Analisi Prodotto")
 
-        # Ripristina l'URL se presente in session_state
+        # Recupera l'URL del prodotto dalla sessione
         product_url = ""
-        if "selected_product_url" in st.session_state:
-            product_url = st.session_state.selected_product_url
-        elif "product_url" in st.session_state and st.session_state.product_url:
+        if "product_url" in st.session_state and st.session_state.product_url:
             product_url = st.session_state.product_url
 
         # Input URL diretto
@@ -737,7 +900,7 @@ def main():
         # Pulsante di analisi
         analyze_button = st.button("Analizza")
 
-        if analyze_button or (product_url and "last_analyzed_url" not in st.session_state):
+        if analyze_button:
             if product_url:
                 if not is_valid_amazon_url(product_url):
                     st.error("L'URL fornito non sembra essere un URL Amazon valido")
@@ -750,8 +913,7 @@ def main():
                             st.error(f"Errore durante l'analisi: {result['error']}")
                         else:
                             # Memorizza l'ultimo URL analizzato
-                            st.session_state.last_analyzed_url = product_url
-                            st.session_state.product_url = product_url  # Memorizza anche qui
+                            st.session_state.product_url = product_url
                             # Memorizza i dettagli del prodotto
                             st.session_state.product_details = result["product"]
 
@@ -761,12 +923,30 @@ def main():
                 st.warning("Inserisci l'URL di un prodotto Amazon")
 
         # Visualizza i dettagli precedenti se presenti
-        elif "product_details" in st.session_state:
+        elif "product_details" in st.session_state and st.session_state.product_details:
             display_product_details(st.session_state.product_details)
 
     # Tab 3: Watch List
     with tab3:
+        # Se siamo entrati nel tab watchlist, assicuriamoci di caricare i dati
+        if st.session_state.active_tab == "Watch List" and not st.session_state.tab_watchlist_loaded:
+            st.session_state.watchlist = get_watchlist()
+            st.session_state.tab_watchlist_loaded = True
+
         display_watchlist_tab()
+
+    # Aggiorna il tab attivo in base a quale tab è stato cliccato
+    if tab1.active:
+        st.session_state.active_tab = "Ricerca Prodotti"
+    elif tab2.active:
+        st.session_state.active_tab = "Analisi Prodotto"
+    elif tab3.active:
+        st.session_state.active_tab = "Watch List"
+
+        # Se passiamo alla watchlist, assicuriamoci che venga caricata
+        if not st.session_state.tab_watchlist_loaded:
+            st.session_state.tab_watchlist_loaded = True
+            st.experimental_rerun()
 
 
 # Funzione principale
