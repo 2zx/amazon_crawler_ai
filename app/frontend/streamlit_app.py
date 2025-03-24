@@ -218,14 +218,21 @@ def display_product_card(product: Dict[str, Any], col):
         # Link al prodotto
         st.markdown(f"[Vedi su Amazon]({product['url']})")
 
-        # Pulsante per i dettagli
-        if st.button("Dettagli", key=f"details_{product['asin']}"):
-            st.session_state.selected_product_url = product['url']
-            st.experimental_rerun()
+        # Pulsanti per dettagli e watchlist in due colonne
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Dettagli", key=f"details_{product['asin']}"):
+                st.session_state.selected_product_url = product['url']
+                st.session_state.active_tab = "Analisi Prodotto"  # Imposta tab attivo
+                st.experimental_rerun()
 
-        # Pulsante per aggiungere alla watch list
-        if st.button("Aggiungi alla Watch List", key=f"watchlist_{product['asin']}"):
-            add_product_to_watchlist(product)
+        with col2:
+            # Pulsante per aggiungere alla watch list
+            if st.button("Aggiungi alla Watch List", key=f"watchlist_{product['asin']}"):
+                result = add_product_to_watchlist(product)
+                if result:
+                    st.session_state.active_tab = "Watch List"  # Vai alla Watch List dopo l'aggiunta
+                    st.experimental_rerun()
 
 
 def display_product_details(product: Dict[str, Any]):
@@ -260,6 +267,13 @@ def display_product_details(product: Dict[str, Any]):
 
         # Link al prodotto
         st.markdown(f"[Vedi su Amazon]({product['url']})")
+
+        # Pulsante per aggiungere alla watch list
+        if st.button("Aggiungi alla Watch List", key=f"watchlist_detail_{product['asin']}"):
+            result = add_product_to_watchlist(product)
+            if result:
+                st.session_state.active_tab = "Watch List"  # Vai alla Watch List dopo l'aggiunta
+                st.experimental_rerun()
 
     with col2:
         # Descrizione
@@ -602,6 +616,11 @@ def add_product_to_watchlist(product, notify_on_price_drop=True, notify_on_avail
 
         if "error" not in result:
             st.success("Prodotto aggiunto alla Watch List")
+
+            # Assicurati che la watchlist venga caricata se non esiste
+            if "watchlist" not in st.session_state:
+                st.session_state.watchlist = get_watchlist()
+
             # Aggiorna la watch list in sessione
             if "watchlist" in st.session_state:
                 st.session_state.watchlist.insert(0, result)
@@ -638,8 +657,13 @@ def main():
         """
     )
 
-    # Tabs per diverse funzionalità
-    tab1, tab2, tab3 = st.tabs(["Ricerca Prodotti", "Analisi Prodotto", "Watch List"])
+    # Imposta il tab attivo se presente in session_state
+    if "active_tab" not in st.session_state:
+        st.session_state.active_tab = "Ricerca Prodotti"
+
+    tabs = ["Ricerca Prodotti", "Analisi Prodotto", "Watch List"]
+    active_index = tabs.index(st.session_state.active_tab)
+    tab1, tab2, tab3 = st.tabs(tabs)
 
     # Tab 1: Ricerca Prodotti
     with tab1:
@@ -700,14 +724,15 @@ def main():
     with tab2:
         st.header("Analisi Prodotto")
 
-        # Input URL diretto
-        product_url = st.text_input("Inserisci l'URL del prodotto Amazon", key="product_url")
-
-        # Se proviene dalla selezione di un prodotto
+        # Ripristina l'URL se presente in session_state
+        product_url = ""
         if "selected_product_url" in st.session_state:
             product_url = st.session_state.selected_product_url
-            # Aggiorna l'input
-            st.experimental_set_query_params(product_url=product_url)
+        elif "product_url" in st.session_state and st.session_state.product_url:
+            product_url = st.session_state.product_url
+
+        # Input URL diretto
+        product_url = st.text_input("Inserisci l'URL del prodotto Amazon", value=product_url, key="product_url_input")
 
         # Pulsante di analisi
         analyze_button = st.button("Analizza")
@@ -726,6 +751,7 @@ def main():
                         else:
                             # Memorizza l'ultimo URL analizzato
                             st.session_state.last_analyzed_url = product_url
+                            st.session_state.product_url = product_url  # Memorizza anche qui
                             # Memorizza i dettagli del prodotto
                             st.session_state.product_details = result["product"]
 
